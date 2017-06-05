@@ -7,19 +7,21 @@ import os
 
 from sklearn import preprocessing
 import tensorflow as tf
+import numpy as np
 
 class TF(object):
     """Tensorflow classifier"""
 
-    def __init__(self, n_features, n_classes, n_epoch, batch_size,
-                 starter_learning_rate, tensor_logdir):
+    N_EPOCH = 100
 
-        self.n_epoch = n_epoch
-        self.batch_size = batch_size
+    def __init__(self, data_provider, starter_learning_rate, tensor_logdir):
+
         self.starter_learning_rate = starter_learning_rate
-        self.n_features = n_features
-        self.n_classes = n_classes
+        self.n_features = data_provider.get_features_number()
+        self.classes = data_provider.get_classes()
         self.tensor_logdir = tensor_logdir
+
+        self.fit_index = 0
 
         self.x = None
         self.y_ = None
@@ -40,11 +42,10 @@ class TF(object):
         else:
             self.log_run = False
 
-
-
     def  __getstate__(self):
         state = self.__dict__.copy()
         del state['x']
+        del state['fit_index']
         del state['y_']
         del state['y']
         del state['z']
@@ -80,13 +81,13 @@ class TF(object):
         # Placeholders for input values.
         with tf.name_scope('inputs'):
             self.x = tf.placeholder(tf.float64, [None, self.n_features], name='x')
-            self.y_ = tf.placeholder(tf.float64, [None, self.n_classes], name='dataset-y')
+            self.y_ = tf.placeholder(tf.float64, [None, len(self.classes)], name='dataset-y')
 
         # Variables for computed stuff, we need to initialise them now.
         with tf.name_scope('weights'):
-            W = tf.Variable(tf.zeros([self.n_features, self.n_classes], dtype=tf.float64),
+            W = tf.Variable(tf.zeros([self.n_features, len(self.classes)], dtype=tf.float64),
                             name='weights')
-            b = tf.Variable(tf.zeros([self.n_classes], dtype=tf.float64), name='bias')
+            b = tf.Variable(tf.zeros([len(self.classes)], dtype=tf.float64), name='bias')
 
         # Predicted y.
         with tf.name_scope('activation'):
@@ -116,9 +117,8 @@ class TF(object):
     def start_session(self):
         """Starts the session"""
 
+        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
         self.sess = tf.Session()
-
-        init = tf.global_variables_initializer()
         self.sess.run(init)
 
     def init_logging(self):
@@ -130,41 +130,78 @@ class TF(object):
         """Return the session"""
         return self.sess
 
-    def fit(self, X, y):
+    def fit(self, data_provider):
         """Fits provided data into the session"""
 
-        n_examples, _ = X.shape
+        self.fit_index = 0
+        it = data_provider.get_data()
+        for x, y in it:
 
-        # 1 column per value so will be easier later to make this work with multiple classes.
-        y = preprocessing.MultiLabelBinarizer().fit_transform(y.reshape(len(y), 1))
+            for _ in range(self.N_EPOCH):
 
-        # floats division otherwise we get 0 if n_examples is lower than the
-        # batch size and minimum 1 iteration.
-        iterations = int(math.ceil(n_examples / self.batch_size))
+                # Check that the batch contains all different classes samples.
+                if len(np.unique(y)) < len(self.classes):
+                    # Convert to a proper error message.
+                    print('Unbalanced classes');
+                    continue
 
-        index = 0
-        for _ in range(self.n_epoch):
-            for j in range(iterations):
-
-                offset = j * self.batch_size
-                it_end = offset + self.batch_size
-                if it_end > n_examples:
-                    it_end = n_examples - 1
-
-                batch_xs = X[offset:it_end]
-                batch_ys = y[offset:it_end]
+                # Switch from a samples classes vector to a multi-class matrix.
+                # TODO Move it to preprocessing using self.classes ONLY FOR TRAINING DATA, NOT TEST DATA.
+                y_multi = preprocessing.MultiLabelBinarizer().fit_transform(y.reshape(len(y), 1))
 
                 if self.log_run:
                     _, summary = self.sess.run([self.train_step, self.merged],
-                                               {self.x: batch_xs, self.y_: batch_ys})
+                                               {self.x: x, self.y_: y_multi})
                     # Add the summary data to the file writer.
-                    self.file_writer.add_summary(summary, index)
+                    self.file_writer.add_summary(summary, self.fit_index)
                 else:
-                    self.sess.run(self.train_step, {self.x: batch_xs, self.y_: batch_ys})
+                    self.sess.run(self.train_step, {self.x: x, self.y_: y_multi})
 
-                index = index + 1
+                # Bump fit count so summary indexes are increased.
+                self.fit_index = self.fit_index + 1
 
-    def predict(self, x):
+    def predict(self, data_provider):
+        """Returns predictions with the prediction probabilities, all related to samples."""
+
+        y_proba = []
+        y_pred = []
+        sampleids = []
+
+        it = data_provider.get_data()
+        for samples, x in it:
+            sampleids = sampleids + samples.tolist()
+            y_proba = y_proba + self.predict_proba(x).tolist()
+            y_pred = y_pred + self.predict_label(x).tolist()
+
+        # Probabilities of the predicted response being correct.
+        y_proba = np.array(y_proba)
+        probabilities = y_proba[range(len(y_proba)), y_pred]
+
+        # First column sampleids, second the prediction and third how
+        # reliable is the prediction (from 0 to 1).
+        return np.vstack((sampleids, y_pred, probabilities)).T.tolist()
+
+    def test(self, data_provider):
+
+        y_test = []
+        y_proba = []
+        y_pred = []
+
+        it = data_provider.get_test_data()
+        for x, y in it:
+            y_test = y_test + y.tolist()
+            y_proba = y_proba + self.predict_proba(x).tolist()
+            y_pred = y_pred + self.predict_label(x).tolist()
+
+        y_proba = np.array(y_proba)
+        y_pred = np.array(y_pred)
+        y_test = np.array(y_test)
+
+        y_score = y_proba[range(len(y_proba)), y_test]
+
+        return [y_test, y_score, y_pred]
+
+    def predict_label(self, x):
         """Returns predictions"""
         return self.sess.run(tf.argmax(self.y, 1), {self.x: x})
 

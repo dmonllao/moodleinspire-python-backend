@@ -9,6 +9,8 @@ import numpy as np
 from sklearn.utils import shuffle
 from sklearn.externals import joblib
 
+from .. import inputs
+
 class Classifier(object):
     """Abstract estimator class"""
 
@@ -78,57 +80,17 @@ class Classifier(object):
         joblib.dump(trained_classifier, classifier_filepath)
 
     @staticmethod
-    def get_labelled_samples(filepath):
+    def get_labelled_samples(filepath, test_data=0.0):
         """Extracts labelled samples from the provided data file"""
-
-        # We skip 3 rows of metadata.
-        samples = np.genfromtxt(filepath, delimiter=',', dtype='float', skip_header=3,
-                                missing_values='', filling_values=False)
-        samples = shuffle(samples)
-
-        # All columns but the last one.
-        X = np.array(samples[:, 0:-1])
-
-        # Only the last one and as integer.
-        y = np.array(samples[:, -1:]).astype(int)
-
-        return [X, y]
+        data_provider = inputs.DataProvider(filepath, [0, 1], training=True, test_data=test_data)
+        return data_provider
 
     @staticmethod
     def get_unlabelled_samples(filepath):
         """Extracts unlabelled samples from the provided data file"""
 
-        # The first column is the sample id with its time range index as a string.
-        # The file contains 3 rows of metadata.
-        sampleids = np.genfromtxt(filepath, delimiter=',', dtype=np.str,
-                                  skip_header=3, missing_values='', filling_values=False,
-                                  usecols=0)
-
-        # We don't know the number of columns, we can only get them all and discard the first one.
-        samples = np.genfromtxt(filepath, delimiter=',', dtype=float, skip_header=3,
-                                missing_values='', filling_values=False)
-        x = samples[:, 1:]
-
-        return [sampleids, x]
-
-    @staticmethod
-    def check_classes_balance(counts):
-        """Checks that the dataset contains enough samples of each class"""
-        for item1 in counts:
-            for item2 in counts:
-                if item1 > (item2 * 3):
-                    return 'Provided classes are very unbalanced, predictions may not be accurate.'
-        return False
-
-    @staticmethod
-    def limit_value(value, lower_bounds, upper_bounds):
-        """Limits the value by lower and upper boundaries"""
-        if value < (lower_bounds - 1):
-            return lower_bounds
-        elif value > (upper_bounds + 1):
-            return upper_bounds
-        else:
-            return value
+        data_provider = inputs.DataProvider(filepath, [0, 1], training=False)
+        return data_provider
 
     def reset_metrics(self):
         """Resets the class metrics"""

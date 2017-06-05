@@ -28,11 +28,7 @@ def training():
     modelid = sys.argv[1]
     directory = sys.argv[2]
 
-    # Sklearn binary classifier - logistic regression.
-    #binary_classifier = binary.Sklearn(modelid, directory)
-    # TensorFlow binary classifier - NN.
     binary_classifier = binary.TensorFlow(modelid, directory)
-
     result = binary_classifier.train_dataset(sys.argv[3])
 
     print(json.dumps(result))
